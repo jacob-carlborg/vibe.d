@@ -517,6 +517,12 @@ class RestInterfaceSettings {
 	*/
 	bool stripTrailingUnderscore = true;
 
+	/** If `true`, allows form parameters in the body.
+
+		These will be treated the same way as query parameter.
+	*/
+	bool formParametersInBodyAllowed = false;
+
 	/// Overrides the default HTTP client settings used by the `RestInterfaceClient`.
 	HTTPClientSettings httpClientSettings;
 
@@ -527,6 +533,7 @@ class RestInterfaceSettings {
 		ret.methodStyle = this.methodStyle;
 		ret.stripTrailingUnderscore = this.stripTrailingUnderscore;
 		ret.allowedOrigins = this.allowedOrigins.dup;
+		ret.formParametersInBodyAllowed = this.formParametersInBodyAllowed;
 		return ret;
 	}
 }
@@ -1021,7 +1028,7 @@ private HTTPServerRequestDelegate jsonMethodHandler(alias Func, size_t ridx, T)(
 
 	void handler(HTTPServerRequest req, HTTPServerResponse res)
 	@safe {
-		if (route.bodyParameters.length) {
+		if (!settings.formParametersInBodyAllowed && route.bodyParameters.length) {
 			logDebug("BODYPARAMS: %s %s", Method, route.bodyParameters.length);
 			/*enforceBadRequest(req.contentType == "application/json",
 				"The Content-Type header needs to be set to application/json.");*/
@@ -1030,6 +1037,9 @@ private HTTPServerRequestDelegate jsonMethodHandler(alias Func, size_t ridx, T)(
 			enforceBadRequest(req.json.type == Json.Type.object,
 				"The request body must contain a JSON object with an entry for each parameter.");
 		}
+
+		auto validJsonBody = req.json.type != Json.Type.undefined &&
+			req.json.type == Json.Type.object;
 
 		static if (isAuthenticated!(T, Func)) {
 			auto auth_info = handleAuthentication!Func(inst, req, res);
@@ -1051,12 +1061,15 @@ private HTTPServerRequestDelegate jsonMethodHandler(alias Func, size_t ridx, T)(
 				if (auto pv = fieldname in req.query)
 					v = fromRestString!PT(*pv);
 			} else static if (sparam.kind == ParameterKind.body_) {
-				if (auto pv = fieldname in req.json) {
-					try
-						v = deserializeJson!PT(*pv);
-					catch (JSONException e)
-						enforceBadRequest(false, e.msg);
-                }
+				if (validJsonBody) {
+					if (auto pv = fieldname in req.json) {
+						try
+							v = deserializeJson!PT(*pv);
+						catch (JSONException e)
+							enforceBadRequest(false, e.msg);
+					}
+				} else if (auto pv = fieldname in req.form)
+					v = fromRestString!PT(*pv);
 			} else static if (sparam.kind == ParameterKind.header) {
 				if (auto pv = fieldname in req.headers)
 					v = fromRestString!PT(*pv);
